@@ -14,10 +14,10 @@ SAMPLE_SIZE = 2048
 #SAMPLE_SIZE = 16384
 
 # pitch for an note can vary by this hz
-PITCH_VARIANCE = 15
+PITCH_VARIANCE = 35
 
 # define pitches that relate to actions: 0-3
-PITCHES = [ 500, 630, 810, 900 ]
+PITCHES = [ 500, 670, 830, 930 ]
 
 # define action GPIO pinouts on Pi board, same number as PITCHES
 # see: https://pinout.xyz/#
@@ -50,9 +50,6 @@ def get_sample_freq():
 
     # Convert raw data to NumPy array
     samps = numpy.fromstring(rawsamps, dtype=numpy.int16)
-
-    # Show the volume and pitch
-    #print analyse.loudness(samps), analyse.detect_pitch(samps), analyse.musical_detect_pitch(samps)
 
     return analyse.detect_pitch(samps)
 
@@ -148,6 +145,8 @@ def wait_for_guard():
 
 
 def find_action(freq):
+    if freq != None and int(freq) == 1002:
+        freq = get_first_sample_at_most(6)
     action = 0
     while action < len(PITCHES):
         expected = PITCHES[action]
@@ -158,6 +157,8 @@ def find_action(freq):
                 if is_expected_freq(freq, expected, PITCH_VARIANCE):
                     expected_count = expected_count + 1
                 freq = get_sample_freq()
+                if freq != None and int(freq) == 1002:
+                    freq = get_first_sample_at_most(2)
 
             if expected_count >= MINIMUM_GUARD_NOTES:
                 print 'FOUND ACTION: ', action
