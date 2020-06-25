@@ -1,0 +1,7 @@
+# required for whistle.py
+sudo apt install python-numpy python-pyaudio python-aubio rpi.gpio
+
+# helpful audio utils
+sudo apt install audacity sox
+
+

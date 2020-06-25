@@ -1,3 +1,4 @@
+#!/usr/bin/python
 
 # audio devices can be specified on command line as either a
 # number or substring of a name.  
@@ -60,10 +61,12 @@ ACTION_PINOUTS = [ 7, 15, 29, 37 ]
 # define number of seconds that corresponding pin should be high after pitch is lost
 PIN_HIGH_DELAY = [ 0, 0, 4, 4 ]
 
-# number of consecutive samples to count as a note
-# i.e., (SAMPLE_SIZE / AUDIO_STREAM_RATE) seconds each note
-NOTE_SAMPLE_COUNT = 6
-MINIMUM_GUARD_NOTES = 3
+# number of consecutive samples to count as a note for guard unlocking
+# 275 ms is approx 6 samples of 2048 at 44.1khz
+NOTE_MILLIS = 275
+NOTE_SAMPLE_COUNT = int( (float(NOTE_MILLIS) / 1000) / (float(SAMPLE_SIZE) / AUDIO_STREAM_RATE) + 0.5)
+MINIMUM_GUARD_NOTES = NOTE_SAMPLE_COUNT / 2
+if MINIMUM_GUARD_NOTES == 0: MINIMUM_GUARD_NOTES = 1
 
 # define a sequnce of pitches, at least one note length each
 # to activate action
@@ -76,8 +79,16 @@ UNGUARDED_ACTIVE_SILENCE_COUNT = int( SECONDS_OF_SILENCE / (float(SAMPLE_SIZE) /
 
 
 # mix and max freqs, ignore freqs outside this range
-MAX_FREQ = max([max(PITCHES), max(GUARD_PITCH_SEQUENCE)]) + PITCH_VARIANCE
-MIN_FREQ = min([min(PITCHES), min(GUARD_PITCH_SEQUENCE)]) - PITCH_VARIANCE
+MAX_FREQ = 50
+MIN_FREQ = 20000
+
+def setMinMax():
+    global MAX_FREQ, MIN_FREQ
+    MAX_FREQ = max([max(PITCHES), max(GUARD_PITCH_SEQUENCE)]) + PITCH_VARIANCE
+    MIN_FREQ = min([min(PITCHES), min(GUARD_PITCH_SEQUENCE)]) - PITCH_VARIANCE
+
+setMinMax()
+
 
 ###########################################################
     
@@ -380,20 +391,30 @@ def is_int_list(l):
     except ValueError:
         return False
 
+def mk_int_list(l):
+    return map(int, l)
+
 # Initialize PyAudio
 pyaud = pyaudio.PyAudio()
+print 'PyAudio initialized ================================='
+print 
+
 
 # parse options
 parser = argparse.ArgumentParser()
 parser.add_argument('-g', '--guard_pitches', dest='guard_pitches', action='store', type=str, help='guard note pitches as csv list, default: ' + ','.join(map(str,GUARD_PITCH_SEQUENCE)))
 parser.add_argument('-p', '--pitches', dest='pitches', action='store', type=str, help='action pitches as csv list, default: ' + ','.join(map(str,PITCHES)))
 parser.add_argument('-o', '--output_pins', dest='output_pins', action='store', type=str, help='output pins as csv list, default: ' + ','.join(map(str,ACTION_PINOUTS)))
+parser.add_argument('-l', '--pin_high_delay', dest='pin_high_delay', action='store', type=str, help='pin high delay as csv list, default: ' + ','.join(map(str,PIN_HIGH_DELAY)))
+
+parser.add_argument('-v', '--pitch_variance', dest='pitch_variance', action='store', type=int, help='pitch variance hz, default: ') # + str(PITCH_VARIANCE))
+parser.add_argument('-n', '--note_millis', dest='note_millis', action='store', type=int, help='milliseconds for each guard note pitch, min=100, max=1000, default: ' + str(NOTE_MILLIS))
 
 parser.add_argument('-i', '--input_audio_device', dest='input_audio_device', help='input audio device, default: ' + str(DEV))
 parser.add_argument('-d', '--output_audio_device', dest='output_audio_device', help='output audio device, default: ' + str(OUT_DEV))
 
 parser.add_argument('-a', '--audio_devices', dest='audio_devices', action='store_true', help='list audio devices and exit')
-parser.add_argument('-s', '--sample', dest='sample', action='store_true', help='continously print frequency pitches, ^C to exit')
+parser.add_argument('-s', '--sample', dest='sample', action='store_true', help='continously print detected frequency pitches, ^C to exit')
 
 args = parser.parse_args()
 
@@ -414,7 +435,8 @@ if args.output_audio_device != None:
 if args.guard_pitches != None:
     l = args.guard_pitches.split(',')
     if is_int_list(l):
-        GUARD_PITCH_SEQUENCE = l
+        GUARD_PITCH_SEQUENCE = mk_int_list(l)
+        setMinMax()
     else:
         print 'error, --guard_pitches is not a comma separated list of integers'
         exit()
@@ -422,7 +444,8 @@ if args.guard_pitches != None:
 if args.pitches != None:
     l = args.pitches.split(',')
     if is_int_list(l):
-        PITCHES = l
+        PITCHES = mk_int_list(l)
+        setMinMax()
     else:
         print 'error, --pitches is not a comma separated list of integers'
         exit()
@@ -430,38 +453,50 @@ if args.pitches != None:
 if args.output_pins != None:
     l = args.output_pins.split(',')
     if is_int_list(l):
-        ACTION_PINOUTS = l
+        ACTION_PINOUTS = mk_int_list(l)
     else:
         print 'error, --output_pins is not a comma separated list of integers'
         exit()
 
-if len(PITCHES) != len(ACTION_PINOUTS):
-    print 'error, --pitches and --output_pins not of equal length'
+if args.pin_high_delay != None:
+    l = args.pin_high_delay.split(',')
+    if is_int_list(l):
+        PIN_HIGH_DELAY = l
+    else:
+        print 'error, --pin_high_delay is not a comma separated list of integers'
+        exit()
+
+if len(PITCHES) != len(ACTION_PINOUTS) or len(PITCHES) != len(PIN_HIGH_DELAY):
+    print 'error, --pitches, --output_pins, and/or --pin_high_delay not of equal length'
     exit()
 
+if args.pitch_variance != None:
+    PITCH_VARIANCE = int(args.pitch_variance)
+    setMinMax()
 
-# old
-# # get command line override for audio input, audio output
-# 
-# if len(sys.argv) == 2 and sys.argv[1] == '-h':
-#     print ''
-#     print 'usage:  python ', sys.argv[0], ' [ audio_input_name_or_number  [ audio_output_name_or_number ] ]'
-#     print ''
-#     print_audio_devices()
-#     pyaud.terminate()
-#     exit()
-#     
-# if len(sys.argv) >= 2:
-#     DEV = int(find_audio_device(sys.argv[1]))
-#     if DEV == -1:
-#         print 'error, audio device ', sys.argv[1], 'not found'
-#         exit()
-# if len(sys.argv) >= 3:
-#     OUT_DEV = find_audio_device(sys.argv[2])
-# 
+if args.note_millis != None:
+    if args.note_millis < 100 or  args.note_millis > 1000:
+        print 'error, --note_millis should be 100 to 1000'
+        exit()
+    NOTE_MILLIS = args.note_millis
+    NOTE_SAMPLE_COUNT = int( (float(NOTE_MILLIS) / 1000) / (float(SAMPLE_SIZE) / AUDIO_STREAM_RATE) + 0.5)
+    MINIMUM_GUARD_NOTES = NOTE_SAMPLE_COUNT / 2
+    if MINIMUM_GUARD_NOTES == 0: MINIMUM_GUARD_NOTES = 1
+
 
 print ' Using input device number: ', DEV
 print 'Using output device number: ', OUT_DEV
+print '                Audio rate: ', AUDIO_STREAM_RATE
+print '               Sample size: ', SAMPLE_SIZE
+print '          Note duration ms: ', NOTE_MILLIS
+print '    Number of samples/note: ', NOTE_SAMPLE_COUNT
+print '            Pitch variance: ', PITCH_VARIANCE
+print '               Guard notes: ', GUARD_PITCH_SEQUENCE
+print '              Action notes: ', PITCHES
+print '               Action pins: ', ACTION_PINOUTS
+print '       Pin high delay secs: ', PIN_HIGH_DELAY
+print '             Minimum pitch: ', MIN_FREQ
+print '             Maximum pitch: ', MAX_FREQ
 
 
 
@@ -473,14 +508,6 @@ STREAM = pyaud.open(
     input_device_index = DEV,
     input = True)
 
-# analyse pyaudio stream
-#STREAM = pyaud.open(
-#    format = pyaudio.paInt16,
-#    channels = CH,
-#    rate = AUDIO_STREAM_RATE,
-#    input_device_index = DEV,
-#    input = True)
-
 if args.sample:
     MAX_FREQ = 20000
     MIN_FREQ = 1
@@ -488,6 +515,10 @@ if args.sample:
         print_sample_freq()
     except KeyboardInterrupt:
         print("*** Ctrl+C pressed, exiting")
+        STREAM.stop_stream()
+        STREAM.close()
+        pyaud.terminate()
+        exit()
 
 
 
