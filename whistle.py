@@ -1,4 +1,6 @@
-DEV = 10
+#DEV = 10
+# Audio Device 'None' for default
+DEV = None
 CH = 1
 
 # audio capture reate
@@ -15,6 +17,10 @@ PITCH_VARIANCE = 10
 # define pitches that relate to actions: 0-3
 PITCHES = [ 83, 105, 128, 170 ]
 
+# define action GPIO pinouts on Pi board, same number as PITCHES
+# see: https://pinout.xyz/#
+ACTION_PINOUTS = [ 7, 15, 29, 37 ]
+
 # number of consecutive samples to count as a note
 # i.e., (SAMPLE_SIZE / AUDIO_STREAM_RATE) seconds each note
 NOTE_SAMPLE_COUNT = 3
@@ -28,6 +34,11 @@ import math
 import numpy
 import pyaudio
 import analyse
+try:
+    import RPi.GPIO as GPIO
+except:
+    pass
+
 
 def get_sample_freq():
     # Read raw microphone data
@@ -72,7 +83,7 @@ def wait_for_guard():
         print '  state=', state
         print '    expecting=',expected,' actual=',freq
 
-        for i in range(NOTE_SAMPLE_COUNT):
+        for i in xrange(NOTE_SAMPLE_COUNT):
 
             if is_expected_freq(freq, expected, PITCH_VARIANCE):
                 expected_count = expected_count + 1
@@ -116,7 +127,7 @@ def find_action(freq):
         expected = PITCHES[action]
         if is_expected_freq(freq, expected, PITCH_VARIANCE):
             expected_count = 0
-            for i in range(NOTE_SAMPLE_COUNT):
+            for i in xrange(NOTE_SAMPLE_COUNT):
                 if is_expected_freq(freq, expected, PITCH_VARIANCE):
                     expected_count = expected_count + 1
                 freq = get_sample_freq()
@@ -141,25 +152,49 @@ def wait_for_silence():
             freq = get_sample_freq()
 
 
+def turn_on_pin(pin):
+    try:
+        GPIO.output(pin, True)
+    except:
+        pass
+
+def turn_off_pin(pin):
+    try:
+        GPIO.output(pin, False)
+    except:
+        pass
+
 def run_detect():
     while True:
         wait_for_guard()
         wait_for_silence()
         print 'start action sound.....'
+
+        # try to get a freqency action, up to 3 times
         freq = get_first_sample()
-        action = find_action(freq)
+        for i in xrange(3):
+            action = find_action(freq)
+            if action != -1:
+                break
+            else:
+                freq = get_sample_freq() 
+        
         expected = PITCHES[action]
+        action_pin = ACTION_PINOUTS[action]
         while is_expected_freq(get_sample_freq(), expected, PITCH_VARIANCE):
             print action
             # perform open/close action on rasp pi
+            turn_on_pin(action_pin)
+
+        turn_off_pin(action_pin) 
+        # end of while true loop
         
         
 
 def generate_sines(list_freqs, tone_length, bitrate ):
     numberofframes = int(bitrate * tone_length)
     wavedata = ''
-    print 'generate '
-    for i in range(len(list_freqs)):
+    for i in xrange(len(list_freqs)):
         frequency = list_freqs[i]
         for x in xrange(numberofframes):
             wavedata = wavedata + chr(int(math.sin(x/((bitrate/frequency)/math.pi)) * 127 + 128))
@@ -200,8 +235,12 @@ note_length_output = (float(SAMPLE_SIZE) / AUDIO_STREAM_RATE) * NOTE_SAMPLE_COUN
 GUARD_ACTIVATE = generate_sines(GUARD_PITCH_SEQUENCE, note_length_output, OUTPUT_BITRATE)
 
 
+
+
+
 # Initialize PyAudio
 pyaud = pyaudio.PyAudio()
+
 
 STREAM = pyaud.open(
     format = pyaudio.paInt16,
@@ -217,10 +256,25 @@ OUTPUT_STREAM = pyaud.open(format = pyaud.get_format_from_width(1),
                 output = True)
 OUTPUT_STREAM.stop_stream()
 
+#print_sample_freq()
+
+# initialize Rasp Pi for GPIO
+try:
+    GPIO.setmode(GPIO.BOARD)
+    for pin in ACTION_PINOUTS:
+        GPIO.setup(pin, GPIO.OUT)
+except:
+    pass
 
 play_guard_notes(GUARD_PITCH_SEQUENCE)
 run_detect()
 
-#print_sample_freq()
+# only get here if we gracefully exit run_detect() loop
+try:
+    for pin in ACTION_PINOUTS:
+        GPIO.output(pin,False)
+    GPIO.cleanup()
+except:
+    pass
 
 
