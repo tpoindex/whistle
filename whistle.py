@@ -28,14 +28,13 @@ SAMPLE_SIZE = 2048
 ###########################################################
 # Pitch detection, gpio action pins, number of samples required
 
-# define pitches that relate to actions: 0-3
-PITCHES = [ 500, 670, 830, 930 ]
-
 # pitch for an note can vary by this hz
 PITCH_VARIANCE = 35
 
-# define action GPIO pinouts on Pi board, same number as PITCHES
-# see: https://pinout.xyz/#
+# define pitches that relate to actions: 0-3
+PITCHES = [ 500, 670, 830, 930 ]
+
+# define action GPIO pinouts on Pi board, same number as PITCHES, see: https://pinout.xyz/#
 ACTION_PINOUTS = [ 7, 15, 29, 37 ]
 
 # number of consecutive samples to count as a note
@@ -47,6 +46,10 @@ MINIMUM_GUARD_NOTES = 3
 # to activate action
 GUARD_PITCH_SEQUENCE = [ 830, 670 ]
 
+# once guard is actived, wait for up to this many seconds, e.g. number samples of silence
+# for activation pitches
+SECONDS_OF_SILENCE = 5
+UNGUARDED_ACTIVE_SILENCE_COUNT = int( SECONDS_OF_SILENCE / (float(SAMPLE_SIZE) / float(AUDIO_STREAM_RATE)) )
 
 ###########################################################
 
@@ -69,8 +72,13 @@ def get_sample_freq():
 
     # Convert raw data to NumPy array
     samps = numpy.fromstring(rawsamps, dtype=numpy.int16)
+    freq = analyse.detect_pitch(samps)
 
-    return analyse.detect_pitch(samps)
+    # analyse erroneously reports 1002.2727...  often, so disregard
+    if freq != None and int(freq) == 1002:
+        freq = None
+
+    return freq
 
 
 def print_sample_freq():
@@ -88,10 +96,6 @@ def get_first_sample():
     while freq == None:
         freq = get_sample_freq()
 
-        # analyse erroneously reports 1002.2727...  often, so disregard
-        if freq != None and int(freq) == 1002:
-            freq = None
-
     return freq
 
 
@@ -103,8 +107,6 @@ def get_first_sample_at_most(maxcount):
         if (i >= maxcount):
             break
         freq = get_sample_freq()
-        if freq != None and int(freq) == 1002:
-            freq = None
 
     return freq
 
@@ -164,8 +166,7 @@ def wait_for_guard():
 
 
 def find_action(freq):
-    if freq != None and int(freq) == 1002:
-        freq = get_first_sample_at_most(6)
+    freq = get_first_sample_at_most(NOTE_SAMPLE_COUNT*2)
     action = 0
     while action < len(PITCHES):
         expected = PITCHES[action]
@@ -175,9 +176,7 @@ def find_action(freq):
             for i in xrange(NOTE_SAMPLE_COUNT):
                 if is_expected_freq(freq, expected, PITCH_VARIANCE):
                     expected_count = expected_count + 1
-                freq = get_sample_freq()
-                if freq != None and int(freq) == 1002:
-                    freq = get_first_sample_at_most(2)
+                freq = get_first_sample_at_most(NOTE_SAMPLE_COUNT)
 
             if expected_count >= MINIMUM_GUARD_NOTES:
                 print 'FOUND ACTION: ', action
@@ -217,25 +216,39 @@ def run_detect():
         wait_for_guard()
         wait_for_silence()
         print 'start action sound.....'
+        active = True
+        while active:
 
-        # try to get a freqency action, up to 3 times
-        freq = get_first_sample()
-        for i in xrange(3):
-            action = find_action(freq)
-            if action != -1:
+            # try to get a freqency action, up to 3 times
+            freq = get_first_sample_at_most(UNGUARDED_ACTIVE_SILENCE_COUNT)
+            if freq == None:
+                active = False
                 break
-            else:
-                freq = get_sample_freq() 
-        
-        expected = PITCHES[action]
-        action_pin = ACTION_PINOUTS[action]
-        while is_expected_freq(get_sample_freq(), expected, PITCH_VARIANCE):
-            print action
-            # perform open/close action on rasp pi
-            turn_on_pin(action_pin)
 
-        turn_off_pin(action_pin) 
-        # end of while true loop
+            # we have a pitch, try to find if it is an action pitch
+            action = find_action(freq)
+            if action == -1:
+                continue
+
+            # found action, get corresponding gpio pin
+            expected = PITCHES[action]
+            action_pin = ACTION_PINOUTS[action]
+
+            # and loop while that pitch is detected
+            freq = get_sample_freq()
+            while is_expected_freq(freq, expected, PITCH_VARIANCE):
+                print action
+                # perform open/close action on rasp pi
+                turn_on_pin(action_pin)
+                freq = get_sample_freq()
+    
+            turn_off_pin(action_pin) 
+
+            # end of while is_expected loop
+
+        # end of while active loop
+
+    # end of while true main loop
         
         
 
