@@ -32,10 +32,13 @@ SAMPLE_SIZE = 2048
 PITCH_VARIANCE = 35
 
 # define pitches that relate to actions: 0-3
-PITCHES = [ 500, 670, 830, 930 ]
+PITCHES = [ 550, 670, 830, 930 ]
 
 # define action GPIO pinouts on Pi board, same number as PITCHES, see: https://pinout.xyz/#
 ACTION_PINOUTS = [ 7, 15, 29, 37 ]
+
+# define number of seconds that corresponding pin should be high after pitch is lost
+PIN_HIGH_DELAY = [ 0, 0, 4, 4 ]
 
 # number of consecutive samples to count as a note
 # i.e., (SAMPLE_SIZE / AUDIO_STREAM_RATE) seconds each note
@@ -80,6 +83,14 @@ def get_sample_freq():
 
     return freq
 
+def sleep_audio(sec):
+    # just read a number of samples in order to sleep
+    # and keep the audio buffer empty while doing sleeping
+    if sec <= 0: return
+    numreads = int( sec / (float(SAMPLE_SIZE) / float(AUDIO_STREAM_RATE)) ) 
+    for i in xrange(numreads):
+        STREAM.read(SAMPLE_SIZE, exception_on_overflow = False)
+
 
 def print_sample_freq():
     while True:
@@ -114,7 +125,7 @@ def get_first_sample_at_most(maxcount):
 def wait_for_guard():
     #play_wave(READY_JINGLE)
     print ''
-    print 'guard waiting'
+    print 'guard waiting for sequence: ', GUARD_PITCH_SEQUENCE
     freq = get_first_sample()
     state = 0
 
@@ -219,7 +230,7 @@ def run_detect():
         active = True
         while active:
 
-            # try to get a freqency action, up to 3 times
+            # try to get an action pitch for up to SECONDS_OF_SILENCE seconds
             freq = get_first_sample_at_most(UNGUARDED_ACTIVE_SILENCE_COUNT)
             if freq == None:
                 active = False
@@ -234,15 +245,24 @@ def run_detect():
             expected = PITCHES[action]
             action_pin = ACTION_PINOUTS[action]
 
-            # and loop while that pitch is detected
+            # read again and loop while that pitch is detected
             freq = get_sample_freq()
+            first_time = True
             while is_expected_freq(freq, expected, PITCH_VARIANCE):
-                print action
+                if first_time:
+                    print action, ' ON, pin: ', action_pin
+                    first_time = False
                 # perform open/close action on rasp pi
                 turn_on_pin(action_pin)
                 freq = get_sample_freq()
     
+            # recognized pitch had stopped, delay before turning off (if any)
+            delay_seconds = PIN_HIGH_DELAY[action]
+            print action,' pitch lost, delaying off for ',delay_seconds,' seconds'
+            sleep_audio(delay_seconds)
+            print action,' OFF, pin: ', action_pin
             turn_off_pin(action_pin) 
+            print 'waiting up to ',SECONDS_OF_SILENCE,' seconds for next command pitch, if any....'
 
             # end of while is_expected loop
 
