@@ -8,14 +8,16 @@ AUDIO_STREAM_RATE = 44100
 OUTPUT_BITRATE = 16000
 
 # samples size should be power of two (required by analyse package)
-SAMPLE_SIZE = 8192
+SAMPLE_SIZE = 2048
+#SAMPLE_SIZE = 4096
+#SAMPLE_SIZE = 8192
 #SAMPLE_SIZE = 16384
 
 # pitch for an note can vary by this hz
-PITCH_VARIANCE = 10
+PITCH_VARIANCE = 15
 
 # define pitches that relate to actions: 0-3
-PITCHES = [ 83, 105, 128, 170 ]
+PITCHES = [ 500, 630, 810, 900 ]
 
 # define action GPIO pinouts on Pi board, same number as PITCHES
 # see: https://pinout.xyz/#
@@ -23,11 +25,12 @@ ACTION_PINOUTS = [ 7, 15, 29, 37 ]
 
 # number of consecutive samples to count as a note
 # i.e., (SAMPLE_SIZE / AUDIO_STREAM_RATE) seconds each note
-NOTE_SAMPLE_COUNT = 3
+NOTE_SAMPLE_COUNT = 6
+MINIMUM_GUARD_NOTES = 3
 
 # define a sequnce of pitches, at least one note length each
 # to activate action
-GUARD_PITCH_SEQUENCE = [ 83, 105, 170 ]
+GUARD_PITCH_SEQUENCE = [ 830, 670 ]
 
 
 import math
@@ -59,18 +62,38 @@ def print_sample_freq():
         freq = get_sample_freq()
         print freq
     
+
 def is_expected_freq(actual, expected, variance):
     return (expected - variance) < actual and (expected + variance) > actual 
     
+
 def get_first_sample():
     freq = get_sample_freq()
     while freq == None:
         freq = get_sample_freq()
 
+        # analyse erroneously reports 1002.2727...  often, so disregard
+        if freq != None and int(freq) == 1002:
+            freq = None
+
     return freq
 
+
+def get_first_sample_at_most(maxcount):
+    i = 1 
+    freq = get_sample_freq()
+    while freq == None:
+        i = i + 1
+        if (i >= maxcount):
+            break
+        freq = get_sample_freq()
+        if freq != None and int(freq) == 1002:
+            freq = None
+
+    return freq
+
+
 def wait_for_guard():
-    # play guard waiting
     #play_wave(READY_JINGLE)
     print ''
     print 'guard waiting'
@@ -93,16 +116,19 @@ def wait_for_guard():
 
 
         # check if we got some correct guard freqencies
-        if expected_count >= NOTE_SAMPLE_COUNT - 1:
+        if expected_count >= MINIMUM_GUARD_NOTES:
             state = state + 1
              
             # allow recognized state to persist until frequency changes
             while is_expected_freq(freq, expected, PITCH_VARIANCE):
                 print '      extra', freq
                 freq = get_sample_freq()
+
+            # get another sample, allowing for silence
+            freq = get_first_sample_at_most(NOTE_SAMPLE_COUNT/2)
+
         else:
-            # play guard not completed
-            print 'guard NOT completed'
+            print 'guard NOT completed, need ',MINIMUM_GUARD_NOTES,', got ',expected_count
             #play_wave(GUARD_NOT_COMPLETE)
             #wait_for_silence()
 
@@ -120,11 +146,12 @@ def wait_for_guard():
     print '==>> GUARD SEQUENCE COMPLETED'
     return True
 
+
 def find_action(freq):
     action = 0
     while action < len(PITCHES):
-        print 'testing action: ', action
         expected = PITCHES[action]
+        print 'testing freq ',freq,' for action: ', action,' expecting: ',expected
         if is_expected_freq(freq, expected, PITCH_VARIANCE):
             expected_count = 0
             for i in xrange(NOTE_SAMPLE_COUNT):
@@ -132,13 +159,14 @@ def find_action(freq):
                     expected_count = expected_count + 1
                 freq = get_sample_freq()
 
-            if expected_count >= NOTE_SAMPLE_COUNT - 1:
-                print 'found action: ', action
+            if expected_count >= MINIMUM_GUARD_NOTES:
+                print 'FOUND ACTION: ', action
                 return action
         else:
             action = action + 1
 
     return -1
+
 
 def wait_for_silence():
     freq = get_sample_freq()
@@ -266,7 +294,7 @@ try:
 except:
     pass
 
-play_guard_notes(GUARD_PITCH_SEQUENCE)
+#play_guard_notes(GUARD_PITCH_SEQUENCE)
 run_detect()
 
 # only get here if we gracefully exit run_detect() loop
