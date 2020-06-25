@@ -3,11 +3,23 @@
 # number or substring of a name.  
 #  python whistle.py  [ input_device [ output_device ] ]
 
+import argparse
+import sys
+import math
+import numpy
+import pyaudio
+import aubio
+try:
+    import RPi.GPIO as GPIO
+except:
+    # allow to continue on import gpio failure
+    pass
+
 ###########################################################
 # Pyaudio devices, number of input channels, sample rate
 
 # Audio input device 'None' for default
-DEV = None
+DEV = 0
 
 # OUT_DEV 'None' for default, or -1 for no output
 OUT_DEV = -1
@@ -24,6 +36,14 @@ SAMPLE_SIZE = 2048
 #SAMPLE_SIZE = 4096
 #SAMPLE_SIZE = 8192
 #SAMPLE_SIZE = 16384
+
+# aubio 
+TOLERANCE = 0.40
+CONFIDENCE_LEVEL = 0.50
+WIN_S = 2048
+HOP_S = SAMPLE_SIZE
+#FFT_METHOD = "default"
+FFT_METHOD = "yinfast"
 
 ###########################################################
 # Pitch detection, gpio action pins, number of samples required
@@ -47,28 +67,47 @@ MINIMUM_GUARD_NOTES = 3
 
 # define a sequnce of pitches, at least one note length each
 # to activate action
-GUARD_PITCH_SEQUENCE = [ 830, 670 ]
+GUARD_PITCH_SEQUENCE = [ 1630, 1300 ]
 
 # once guard is actived, wait for up to this many seconds, e.g. number samples of silence
 # for activation pitches
 SECONDS_OF_SILENCE = 5
 UNGUARDED_ACTIVE_SILENCE_COUNT = int( SECONDS_OF_SILENCE / (float(SAMPLE_SIZE) / float(AUDIO_STREAM_RATE)) )
 
-###########################################################
 
-import sys
-import math
-import numpy
-import pyaudio
-import analyse
-try:
-    import RPi.GPIO as GPIO
-except:
-    # allow to continue on import gpio failure
-    pass
+# mix and max freqs, ignore freqs outside this range
+MAX_FREQ = max([max(PITCHES), max(GUARD_PITCH_SEQUENCE)]) + PITCH_VARIANCE
+MIN_FREQ = min([min(PITCHES), min(GUARD_PITCH_SEQUENCE)]) - PITCH_VARIANCE
+
+###########################################################
+    
+
+
+PITCH_O = aubio.pitch(FFT_METHOD, WIN_S, HOP_S, AUDIO_STREAM_RATE)
+PITCH_O.set_tolerance(TOLERANCE)
+
 
 
 def get_sample_freq():
+    # Read raw microphone data
+    # rawsamps = STREAM.read(SAMPLE_SIZE)
+    rawsamps = STREAM.read(SAMPLE_SIZE, exception_on_overflow = False)
+
+    # Convert raw data to NumPy array
+    samps = numpy.fromstring(rawsamps, dtype=numpy.float32)
+    freq = PITCH_O(samps)[0]
+    confidence = PITCH_O.get_confidence()
+
+    # print("{} / {}".format(freq,confidence))
+
+    if freq < 1.0 or confidence < CONFIDENCE_LEVEL: 
+        return None
+    if freq < MIN_FREQ or freq > MAX_FREQ:
+        return None
+
+    return int(freq)
+
+def get_sample_freq_ANALYSE():
     # Read raw microphone data
     # rawsamps = STREAM.read(SAMPLE_SIZE)
     rawsamps = STREAM.read(SAMPLE_SIZE, exception_on_overflow = False)
@@ -95,7 +134,8 @@ def sleep_audio(sec):
 def print_sample_freq():
     while True:
         freq = get_sample_freq()
-        print freq
+        if freq != None:
+            print freq
     
 
 def is_expected_freq(actual, expected, variance):
@@ -164,7 +204,7 @@ def wait_for_guard():
             state = 0
             # play guard waiting
             print ''
-            print 'guard waiting'
+            print 'guard waiting for sequence: ', GUARD_PITCH_SEQUENCE
 
             #play_wave(READY_JINGLE)
             #wait_for_silence()
@@ -331,39 +371,126 @@ GUARD_ACTIVATE = generate_sines(GUARD_PITCH_SEQUENCE, note_length_output, OUTPUT
 
 ####################################################
 
+def is_int_list(l):
+    if len(l) == 0:
+       return False
+    try:
+       map(int, l)
+       return True
+    except ValueError:
+        return False
+
 # Initialize PyAudio
 pyaud = pyaudio.PyAudio()
 
+# parse options
+parser = argparse.ArgumentParser()
+parser.add_argument('-g', '--guard_pitches', dest='guard_pitches', action='store', type=str, help='guard note pitches as csv list, default: ' + ','.join(map(str,GUARD_PITCH_SEQUENCE)))
+parser.add_argument('-p', '--pitches', dest='pitches', action='store', type=str, help='action pitches as csv list, default: ' + ','.join(map(str,PITCHES)))
+parser.add_argument('-o', '--output_pins', dest='output_pins', action='store', type=str, help='output pins as csv list, default: ' + ','.join(map(str,ACTION_PINOUTS)))
 
-# get command line override for audio input, audio output
+parser.add_argument('-i', '--input_audio_device', dest='input_audio_device', help='input audio device, default: ' + str(DEV))
+parser.add_argument('-d', '--output_audio_device', dest='output_audio_device', help='output audio device, default: ' + str(OUT_DEV))
 
-if len(sys.argv) == 2 and sys.argv[1] == '-h':
-    print ''
-    print 'usage:  python ', sys.argv[0], ' [ audio_input_name_or_number  [ audio_output_name_or_number ] ]'
-    print ''
+parser.add_argument('-a', '--audio_devices', dest='audio_devices', action='store_true', help='list audio devices and exit')
+parser.add_argument('-s', '--sample', dest='sample', action='store_true', help='continously print frequency pitches, ^C to exit')
+
+args = parser.parse_args()
+
+if args.audio_devices:
     print_audio_devices()
     pyaud.terminate()
     exit()
-    
-if len(sys.argv) >= 2:
-    DEV = int(find_audio_device(sys.argv[1]))
+
+if args.input_audio_device != None:
+    DEV = int(find_audio_device(args.input_audio_device))
     if DEV == -1:
-        print 'error, audio device ', sys.argv[1], 'not found'
+        print 'error, input_audio_device ', args.input_audio_device, 'not found'
         exit()
-if len(sys.argv) >= 3:
-    OUT_DEV = find_audio_device(sys.argv[2])
+
+if args.output_audio_device != None:
+    OUT_DEV = int(find_audio_device(args.output_audio_device))
+
+if args.guard_pitches != None:
+    l = args.guard_pitches.split(',')
+    if is_int_list(l):
+        GUARD_PITCH_SEQUENCE = l
+    else:
+        print 'error, --guard_pitches is not a comma separated list of integers'
+        exit()
+
+if args.pitches != None:
+    l = args.pitches.split(',')
+    if is_int_list(l):
+        PITCHES = l
+    else:
+        print 'error, --pitches is not a comma separated list of integers'
+        exit()
+
+if args.output_pins != None:
+    l = args.output_pins.split(',')
+    if is_int_list(l):
+        ACTION_PINOUTS = l
+    else:
+        print 'error, --output_pins is not a comma separated list of integers'
+        exit()
+
+if len(PITCHES) != len(ACTION_PINOUTS):
+    print 'error, --pitches and --output_pins not of equal length'
+    exit()
+
+
+# old
+# # get command line override for audio input, audio output
+# 
+# if len(sys.argv) == 2 and sys.argv[1] == '-h':
+#     print ''
+#     print 'usage:  python ', sys.argv[0], ' [ audio_input_name_or_number  [ audio_output_name_or_number ] ]'
+#     print ''
+#     print_audio_devices()
+#     pyaud.terminate()
+#     exit()
+#     
+# if len(sys.argv) >= 2:
+#     DEV = int(find_audio_device(sys.argv[1]))
+#     if DEV == -1:
+#         print 'error, audio device ', sys.argv[1], 'not found'
+#         exit()
+# if len(sys.argv) >= 3:
+#     OUT_DEV = find_audio_device(sys.argv[2])
+# 
 
 print ' Using input device number: ', DEV
 print 'Using output device number: ', OUT_DEV
 
 
 
+# aubio pyaudio stream
 STREAM = pyaud.open(
-    format = pyaudio.paInt16,
+    format = pyaudio.paFloat32,
     channels = CH,
     rate = AUDIO_STREAM_RATE,
     input_device_index = DEV,
     input = True)
+
+# analyse pyaudio stream
+#STREAM = pyaud.open(
+#    format = pyaudio.paInt16,
+#    channels = CH,
+#    rate = AUDIO_STREAM_RATE,
+#    input_device_index = DEV,
+#    input = True)
+
+if args.sample:
+    MAX_FREQ = 20000
+    MIN_FREQ = 1
+    try:
+        print_sample_freq()
+    except KeyboardInterrupt:
+        print("*** Ctrl+C pressed, exiting")
+
+
+
 
 if OUT_DEV != -1:
     OUTPUT_STREAM = pyaud.open(format = pyaud.get_format_from_width(1),
