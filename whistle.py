@@ -1,6 +1,18 @@
-#DEV = 10
-# Audio Device 'None' for default
+
+# audio devices can be specified on command line as either a
+# number or substring of a name.  
+#  python whistle.py  [ input_device [ output_device ] ]
+
+###########################################################
+# Pyaudio devices, number of input channels, sample rate
+
+# Audio input device 'None' for default
 DEV = None
+
+# OUT_DEV 'None' for default, or -1 for no output
+OUT_DEV = -1
+
+# number of recording channels, probably 1
 CH = 1
 
 # audio capture reate
@@ -13,11 +25,14 @@ SAMPLE_SIZE = 2048
 #SAMPLE_SIZE = 8192
 #SAMPLE_SIZE = 16384
 
-# pitch for an note can vary by this hz
-PITCH_VARIANCE = 35
+###########################################################
+# Pitch detection, gpio action pins, number of samples required
 
 # define pitches that relate to actions: 0-3
 PITCHES = [ 500, 670, 830, 930 ]
+
+# pitch for an note can vary by this hz
+PITCH_VARIANCE = 35
 
 # define action GPIO pinouts on Pi board, same number as PITCHES
 # see: https://pinout.xyz/#
@@ -33,6 +48,9 @@ MINIMUM_GUARD_NOTES = 3
 GUARD_PITCH_SEQUENCE = [ 830, 670 ]
 
 
+###########################################################
+
+import sys
 import math
 import numpy
 import pyaudio
@@ -40,6 +58,7 @@ import analyse
 try:
     import RPi.GPIO as GPIO
 except:
+    # allow to continue on import gpio failure
     pass
 
 
@@ -236,26 +255,38 @@ def play_guard_notes(list_freqs):
     wave = generate_sines(list_freqs, length_output_tones, OUTPUT_BITRATE)
     play_wave(wave)
 
-def play_waveOLD(wave, bitrate):
-    outstream = pyaud.open(format = pyaud.get_format_from_width(1),
-                channels = 1,
-                output_device_index = DEV,
-                rate = bitrate,
-                output = True)
-    print 'write '
-    outstream.write(wave)
-    print 'stop '
-    outstream.stop_stream()
-    print 'close'
-    outstream.close()
-
-    
 def play_wave(wave):
+    if OUT_DEV == -1:
+        return
     OUTPUT_STREAM.start_stream()
     OUTPUT_STREAM.write(wave)
     OUTPUT_STREAM.stop_stream()
 
-    
+
+def find_audio_device(s):
+    # if s is an integer string return it,
+    # otherwise, look in pyaudio devices for a substring match
+    if s.startswith('-') and s[1:].isdigit():
+        return s
+    if s.isdigit():
+        return s
+    s = s.lower()
+    for i in range(pyaud.get_device_count()):
+        dev = pyaud.get_device_info_by_index(i)
+        ind = dev['index']
+        name = dev['name'].lower()
+        if s in name:
+            return ind
+    return -1
+
+
+def print_audio_devices():    
+    print 'Audio devices ======================================='
+    for i in range(pyaud.get_device_count()):
+        dev = pyaud.get_device_info_by_index(i)
+        print dev['index'], dev['name'], 'channels:', dev['maxInputChannels'], 'defaultSampleRate', dev['defaultSampleRate']
+
+
 
 READY_JINGLE = generate_sines( [ 800, 1600 ], .20, OUTPUT_BITRATE)
 GUARD_NOT_COMPLETE = generate_sines( [ 333 ], .20, OUTPUT_BITRATE)
@@ -265,10 +296,29 @@ GUARD_ACTIVATE = generate_sines(GUARD_PITCH_SEQUENCE, note_length_output, OUTPUT
 
 
 
-
+####################################################
 
 # Initialize PyAudio
 pyaud = pyaudio.PyAudio()
+
+
+# get command line override for audio input, audio output
+
+if len(sys.argv) == 2 and sys.argv[1] == '-h':
+    print 'usage:  python ',sys.argv[0], ' [ audio_input_name_or_number  [ audio_output_name_or_number ] ]'
+    print ''
+    print_audio_devices()
+    pyaud.terminate()
+    exit()
+    
+if len(sys.argv) >= 2:
+    DEV = find_audio_device(sys.argv[1])
+if len(sys.argv) >= 3:
+    OUT_DEV = find_audio_device(sys.argv[2])
+
+print ' Using input device number: ', DEV
+print 'Using output device number: ', OUT_DEV
+
 
 
 STREAM = pyaud.open(
@@ -278,14 +328,15 @@ STREAM = pyaud.open(
     input_device_index = DEV,
     input = True)
 
-OUTPUT_STREAM = pyaud.open(format = pyaud.get_format_from_width(1),
+if OUT_DEV != -1:
+    OUTPUT_STREAM = pyaud.open(format = pyaud.get_format_from_width(1),
                 channels = 1,
-                output_device_index = DEV,
+                output_device_index = OUT_DEV,
                 rate = OUTPUT_BITRATE,
+                start = False,
                 output = True)
-OUTPUT_STREAM.stop_stream()
+    OUTPUT_STREAM.stop_stream()
 
-#print_sample_freq()
 
 # initialize Rasp Pi for GPIO
 try:
@@ -296,9 +347,30 @@ except:
     pass
 
 #play_guard_notes(GUARD_PITCH_SEQUENCE)
-run_detect()
 
-# only get here if we gracefully exit run_detect() loop
+
+#####################################################
+# main detection loop
+
+try:
+    run_detect()
+except KeyboardInterrupt:
+    print("*** Ctrl+C pressed, exiting")
+
+
+
+
+
+# shutdown audio input, and output (if opened)
+STREAM.stop_stream()
+STREAM.close()
+if OUT_DEV != -1:
+    OUT_STREAM.stop_stream()
+    OUT_STREAM.close()
+pyaud.terminate()
+
+
+# shutdown gpio
 try:
     for pin in ACTION_PINOUTS:
         GPIO.output(pin,False)
