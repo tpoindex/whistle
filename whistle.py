@@ -318,14 +318,18 @@ pyaud = pyaudio.PyAudio()
 # get command line override for audio input, audio output
 
 if len(sys.argv) == 2 and sys.argv[1] == '-h':
-    print 'usage:  python ',sys.argv[0], ' [ audio_input_name_or_number  [ audio_output_name_or_number ] ]'
+    print ''
+    print 'usage:  python ', sys.argv[0], ' [ audio_input_name_or_number  [ audio_output_name_or_number ] ]'
     print ''
     print_audio_devices()
     pyaud.terminate()
     exit()
     
 if len(sys.argv) >= 2:
-    DEV = find_audio_device(sys.argv[1])
+    DEV = int(find_audio_device(sys.argv[1]))
+    if DEV == -1:
+        print 'error, audio device ', sys.argv[1], 'not found'
+        exit()
 if len(sys.argv) >= 3:
     OUT_DEV = find_audio_device(sys.argv[2])
 
@@ -378,8 +382,7 @@ except KeyboardInterrupt:
 STREAM.stop_stream()
 STREAM.close()
 if OUT_DEV != -1:
-    OUT_STREAM.stop_stream()
-    OUT_STREAM.close()
+    OUTPUT_STREAM.close()
 pyaud.terminate()
 
 
