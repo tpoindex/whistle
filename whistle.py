@@ -43,8 +43,10 @@ TOLERANCE = 0.40
 CONFIDENCE_LEVEL = 0.50
 WIN_S = 2048
 HOP_S = SAMPLE_SIZE
-#FFT_METHOD = "default"
 FFT_METHOD = "yinfast"
+
+# FFT_METHOD = "default"
+# note that some FFT methods don't report confidence level, so adjust accordingly
 
 ###########################################################
 # Pitch detection, gpio action pins, number of samples required
@@ -93,11 +95,9 @@ setMinMax()
 ###########################################################
     
 
-
+# get the aubio pitch object 
 PITCH_O = aubio.pitch(FFT_METHOD, WIN_S, HOP_S, AUDIO_STREAM_RATE)
 PITCH_O.set_tolerance(TOLERANCE)
-
-
 
 def get_sample_freq():
     # Read raw microphone data
@@ -118,26 +118,12 @@ def get_sample_freq():
 
     return int(freq)
 
-def get_sample_freq_ANALYSE():
-    # Read raw microphone data
-    # rawsamps = STREAM.read(SAMPLE_SIZE)
-    rawsamps = STREAM.read(SAMPLE_SIZE, exception_on_overflow = False)
-
-    # Convert raw data to NumPy array
-    samps = numpy.fromstring(rawsamps, dtype=numpy.int16)
-    freq = analyse.detect_pitch(samps)
-
-    # analyse erroneously reports 1002.2727...  often, so disregard
-    if freq != None and int(freq) == 1002:
-        freq = None
-
-    return freq
 
 def sleep_audio(sec):
     # just read a number of samples in order to sleep
     # and keep the audio buffer empty while doing sleeping
     if sec <= 0: return
-    numreads = int( sec / (float(SAMPLE_SIZE) / float(AUDIO_STREAM_RATE)) ) 
+    numreads = int( float(sec) / (float(SAMPLE_SIZE) / float(AUDIO_STREAM_RATE)) ) 
     for i in xrange(numreads):
         STREAM.read(SAMPLE_SIZE, exception_on_overflow = False)
 

@@ -1,12 +1,20 @@
 # whistle
 Whistle controls output pins on a Raspberry Pi by detecting whistles, singing notes, etc.
 
+Whistle uses guard pitches to prevent random sounds from activating the
+Rasp Pi output pins.  A sequence of one or more pitches must be detected
+in order to unlock the action pitches.  Once the guard sequence has
+been satisfied, a detected action pitch will turn on the corresponding
+pin.  Once the pitch is no longer detected, an optional delay period
+will keep the pin high, or immediately go low if no delay is set.
+The unlocked state will persist until five seconds is detected, after
+which whistle will once again enter the guarded state.  
+
 See file 'pkgs_to_install' for required Python packages.
 
 Aubio (https://aubio.org/) is used as the audio analyzer.  Currently, the
 ''yinfast'' algorithm is used for detection.  You can try experimenting
 with other algorithms.  See: https://aubio.org/manual/latest/py_analysis.html
-
 
 
 ```
@@ -44,15 +52,19 @@ Notes on options:
 - **Guard Pitches** (-g) These must be completed in order to unlock the action pitches.
   Guards pitches can be as few as one pitch, or multiple.
 
-- **Note milliseconds** (-n) This specifies the length of a note for guards and actions.
+- **Note milliseconds** (-n) This specifies the length of a note for guards pitches.
+  One-half this number of samples must be detected in the pitch range to advance
+  to the next step.
 
 - **Pitch Variance** (-v) This allow notes to be slightly off, plus or minus this value in Hertz.
    Unless you have perfect pitch, you probably need this.
 
 - **Audio Devices** (-i and -o) PyAudio assigns a name an number to each audio device. You can
-   specify these options as either an integer, or a substring of the name.  For instance, if
-   you have 'Generic USB Audio' device, you can specify **-i usb**   Use the **-a** option
-   to list devices.
+   specify these options as either an integer, or a substring of the name (case insensitive.)  
+   For instance, if you have 'Generic USB Audio' device, you can specify **-i usb**.   
+   Use the **-a** option to list devices.
 
 - **Print samples** (-s) This allows you to simply print the detected pitch.  Not all frequencies
   may be detected, due to harmonics, noise, sample rates, particular FFT algorithms, etc.
+
+
