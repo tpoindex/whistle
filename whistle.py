@@ -8,6 +8,7 @@ import argparse
 import sys
 import math
 import numpy
+import time
 import pyaudio
 import aubio
 try:
@@ -52,7 +53,7 @@ FFT_METHOD = "yinfast"
 # Pitch detection, gpio action pins, number of samples required
 
 # pitch for an note can vary by this hz
-PITCH_VARIANCE = 35
+PITCH_VARIANCE = 50
 
 # define pitches that relate to actions: 0-3
 PITCHES = [ 550, 670, 830, 930 ]
@@ -61,7 +62,7 @@ PITCHES = [ 550, 670, 830, 930 ]
 ACTION_PINOUTS = [ 7, 15, 29, 37 ]
 
 # define number of seconds that corresponding pin should be high after pitch is lost
-PIN_HIGH_DELAY = [ 0, 0, 4, 4 ]
+PIN_ON_DELAY = [ 0, 0, 4, 4 ]
 
 # number of consecutive samples to count as a note for guard unlocking
 # 275 ms is approx 6 samples of 2048 at 44.1khz
@@ -90,6 +91,19 @@ def setMinMax():
     MIN_FREQ = min([min(PITCHES), min(GUARD_PITCH_SEQUENCE)]) - PITCH_VARIANCE
 
 setMinMax()
+
+###########################################################
+# Pin out values - Values are set for relays, etc. that
+# use a HIGH value for "off", and are set LOW for "on"
+# option -x will invert these values, so that HIGH is "on", LOW is "off"
+PIN_ON = True
+PIN_OFF = False
+try:
+    PIN_ON = GPIO.LOW
+    PIN_OFF = GPIO.HIGH
+except:
+    pass
+
 
 
 ###########################################################
@@ -160,7 +174,8 @@ def get_first_sample_at_most(maxcount):
 
 
 def wait_for_guard():
-    #play_wave(READY_JINGLE)
+    play_wave(GUARD_START)
+    wait_for_silence()
     print ''
     print 'guard waiting for sequence: ', GUARD_PITCH_SEQUENCE
     freq = get_first_sample()
@@ -190,26 +205,28 @@ def wait_for_guard():
                 print '      extra', freq
                 freq = get_sample_freq()
 
-            # get another sample, allowing for silence
-            freq = get_first_sample_at_most(NOTE_SAMPLE_COUNT/2)
+            # get another sample, allowing for silence, if we have more guard notes to process
+            if state < len(GUARD_PITCH_SEQUENCE):
+                freq = get_first_sample_at_most(NOTE_SAMPLE_COUNT/2)
 
         else:
             print 'guard NOT completed, need ',MINIMUM_GUARD_NOTES,', got ',expected_count
-            #play_wave(GUARD_NOT_COMPLETE)
-            #wait_for_silence()
+            play_wave(GUARD_NOT_COMPLETE)
+            wait_for_silence()
+            time.sleep(1.0)
 
             state = 0
             # play guard waiting
             print ''
             print 'guard waiting for sequence: ', GUARD_PITCH_SEQUENCE
-
-            #play_wave(READY_JINGLE)
-            #wait_for_silence()
+            play_wave(GUARD_START)
+            wait_for_silence()
             freq = get_first_sample()
 
     # all states completed
-    # play guard sequence completed
     print '==>> GUARD SEQUENCE COMPLETED'
+    play_wave(READY_ACTION)
+    wait_for_silence
     return True
 
 
@@ -238,7 +255,7 @@ def find_action(freq):
 def wait_for_silence():
     freq = get_sample_freq()
     count = 0
-    while count < NOTE_SAMPLE_COUNT:
+    while count < NOTE_SAMPLE_COUNT/2:
         if freq == None:
             count = count + 1
             freq = get_sample_freq()
@@ -249,13 +266,13 @@ def wait_for_silence():
 
 def turn_on_pin(pin):
     try:
-        GPIO.output(pin, True)
+        GPIO.output(pin, PIN_ON)
     except:
         pass
 
 def turn_off_pin(pin):
     try:
-        GPIO.output(pin, False)
+        GPIO.output(pin, PIN_OFF)
     except:
         pass
 
@@ -294,7 +311,7 @@ def run_detect():
                 freq = get_sample_freq()
     
             # recognized pitch had stopped, delay before turning off (if any)
-            delay_seconds = PIN_HIGH_DELAY[action]
+            delay_seconds = PIN_ON_DELAY[action]
             print action,' pitch lost, delaying off for ',delay_seconds,' seconds'
             sleep_audio(delay_seconds)
             print action,' OFF, pin: ', action_pin
@@ -316,7 +333,6 @@ def generate_sines(list_freqs, tone_length, bitrate ):
         frequency = list_freqs[i]
         for x in xrange(numberofframes):
             wavedata = wavedata + chr(int(math.sin(x/((bitrate/frequency)/math.pi)) * 127 + 128))
-
     return wavedata
 
     
@@ -330,7 +346,10 @@ def play_wave(wave):
         return
     OUTPUT_STREAM.start_stream()
     OUTPUT_STREAM.write(wave)
+    time.sleep(float(len(wave)) / OUTPUT_BITRATE)
+    #sleep_audio(float(len(wave)) / OUTPUT_BITRATE)
     OUTPUT_STREAM.stop_stream()
+    wait_for_silence()
 
 
 def find_audio_device(s):
@@ -358,12 +377,13 @@ def print_audio_devices():
 
 
 
-READY_JINGLE = generate_sines( [ 800, 1600 ], .20, OUTPUT_BITRATE)
-GUARD_NOT_COMPLETE = generate_sines( [ 333 ], .20, OUTPUT_BITRATE)
+GUARD_START = generate_sines( [ 2600, 2900 ], .10, OUTPUT_BITRATE)
+GUARD_NOT_COMPLETE = generate_sines( [ 2333 ], .20, OUTPUT_BITRATE)
+READY_ACTION = generate_sines( [ 2000, 2200, 2400 ], .10, OUTPUT_BITRATE)
 
 note_length_output = (float(SAMPLE_SIZE) / AUDIO_STREAM_RATE) * NOTE_SAMPLE_COUNT
-GUARD_ACTIVATE = generate_sines(GUARD_PITCH_SEQUENCE, note_length_output, OUTPUT_BITRATE)
-
+GUARD_SAMPLE = generate_sines(GUARD_PITCH_SEQUENCE, note_length_output, OUTPUT_BITRATE)
+ACTIVATE_SAMPLE = generate_sines(PITCHES, note_length_output, OUTPUT_BITRATE)
 
 
 ####################################################
@@ -391,14 +411,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-g', '--guard_pitches', dest='guard_pitches', action='store', type=str, help='guard note pitches as csv list, default: ' + ','.join(map(str,GUARD_PITCH_SEQUENCE)))
 parser.add_argument('-p', '--pitches', dest='pitches', action='store', type=str, help='action pitches as csv list, default: ' + ','.join(map(str,PITCHES)))
 parser.add_argument('-o', '--output_pins', dest='output_pins', action='store', type=str, help='output pins as csv list, default: ' + ','.join(map(str,ACTION_PINOUTS)))
-parser.add_argument('-l', '--pin_high_delay', dest='pin_high_delay', action='store', type=str, help='pin high delay as csv list, default: ' + ','.join(map(str,PIN_HIGH_DELAY)))
+parser.add_argument('-l', '--pin_on_delay', dest='pin_on_delay', action='store', type=str, help='pin on delay as csv list, default: ' + ','.join(map(str,PIN_ON_DELAY)))
 
-parser.add_argument('-v', '--pitch_variance', dest='pitch_variance', action='store', type=int, help='pitch variance hz, default: ') # + str(PITCH_VARIANCE))
+parser.add_argument('-v', '--pitch_variance', dest='pitch_variance', action='store', type=int, help='pitch variance hz, default: ' + str(PITCH_VARIANCE))
 parser.add_argument('-n', '--note_millis', dest='note_millis', action='store', type=int, help='milliseconds for each guard note pitch, min=100, max=1000, default: ' + str(NOTE_MILLIS))
 
 parser.add_argument('-i', '--input_audio_device', dest='input_audio_device', help='input audio device, default: ' + str(DEV))
 parser.add_argument('-d', '--output_audio_device', dest='output_audio_device', help='output audio device, default: ' + str(OUT_DEV))
 
+parser.add_argument('-x', '--invert_output', dest='invert_output', action='store_true', help='invert output, ie. HIGH=on, default LOW=on')
 parser.add_argument('-a', '--audio_devices', dest='audio_devices', action='store_true', help='list audio devices and exit')
 parser.add_argument('-s', '--sample', dest='sample', action='store_true', help='continously print detected frequency pitches, ^C to exit')
 
@@ -444,16 +465,16 @@ if args.output_pins != None:
         print 'error, --output_pins is not a comma separated list of integers'
         exit()
 
-if args.pin_high_delay != None:
-    l = args.pin_high_delay.split(',')
+if args.pin_on_delay != None:
+    l = args.pin_on_delay.split(',')
     if is_int_list(l):
-        PIN_HIGH_DELAY = l
+        PIN_ON_DELAY = l
     else:
-        print 'error, --pin_high_delay is not a comma separated list of integers'
+        print 'error, --pin_on_delay is not a comma separated list of integers'
         exit()
 
-if len(PITCHES) != len(ACTION_PINOUTS) or len(PITCHES) != len(PIN_HIGH_DELAY):
-    print 'error, --pitches, --output_pins, and/or --pin_high_delay not of equal length'
+if len(PITCHES) != len(ACTION_PINOUTS) or len(PITCHES) != len(PIN_ON_DELAY):
+    print 'error, --pitches, --output_pins, and/or --pin_on_delay not of equal length'
     exit()
 
 if args.pitch_variance != None:
@@ -469,6 +490,17 @@ if args.note_millis != None:
     MINIMUM_GUARD_NOTES = NOTE_SAMPLE_COUNT / 2
     if MINIMUM_GUARD_NOTES == 0: MINIMUM_GUARD_NOTES = 1
 
+if args.invert_output:
+    pin_on_level = "GPIO.HIGH"
+    try:
+        PIN_ON = GPIO.HIGH
+        PIN_OFF = GPIO.LOW
+    except:
+        pass
+else:
+    pin_on_level = "GPIO.LOW"
+
+
 
 print ' Using input device number: ', DEV
 print 'Using output device number: ', OUT_DEV
@@ -480,9 +512,10 @@ print '            Pitch variance: ', PITCH_VARIANCE
 print '               Guard notes: ', GUARD_PITCH_SEQUENCE
 print '              Action notes: ', PITCHES
 print '               Action pins: ', ACTION_PINOUTS
-print '       Pin high delay secs: ', PIN_HIGH_DELAY
+print '       Pin high delay secs: ', PIN_ON_DELAY
 print '             Minimum pitch: ', MIN_FREQ
 print '             Maximum pitch: ', MAX_FREQ
+print '             Pin output ON: ', pin_on_level
 
 
 
@@ -524,6 +557,7 @@ try:
     GPIO.setmode(GPIO.BOARD)
     for pin in ACTION_PINOUTS:
         GPIO.setup(pin, GPIO.OUT)
+        GPIO.output(pin, PIN_OFF)
 except:
     pass
 
@@ -553,7 +587,7 @@ pyaud.terminate()
 # shutdown gpio
 try:
     for pin in ACTION_PINOUTS:
-        GPIO.output(pin,False)
+        GPIO.output(pin,PIN_OFF)
     GPIO.cleanup()
 except:
     pass
