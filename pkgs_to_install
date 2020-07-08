@@ -1,4 +1,10 @@
 # required for whistle.py
+
+# minimum versions required:
+# python-aubio:  0.4.6 
+# python-pyaudio 0.2.11
+# python-numpy:  1.16.2
+
 sudo apt install python-numpy python-pyaudio python-aubio rpi.gpio
 
 # helpful audio utils

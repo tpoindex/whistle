@@ -137,7 +137,7 @@ def sleep_audio(sec):
     # just read a number of samples in order to sleep
     # and keep the audio buffer empty while doing sleeping
     if sec <= 0: return
-    numreads = int( float(sec) / (float(SAMPLE_SIZE) / float(AUDIO_STREAM_RATE)) ) 
+    numreads = int( float(sec) / (float(SAMPLE_SIZE) / float(AUDIO_STREAM_RATE)) ) + 1
     for i in xrange(numreads):
         STREAM.read(SAMPLE_SIZE, exception_on_overflow = False)
 
@@ -181,6 +181,7 @@ def wait_for_guard():
     freq = get_first_sample()
     state = 0
 
+    misses = 0
     while state < len(GUARD_PITCH_SEQUENCE):
         expected = GUARD_PITCH_SEQUENCE[state]
         expected_count = 0
@@ -210,16 +211,28 @@ def wait_for_guard():
                 freq = get_first_sample_at_most(NOTE_SAMPLE_COUNT/2)
 
         else:
+            time.sleep(.5)
+            sleep_audio(.5)
             print 'guard NOT completed, need ',MINIMUM_GUARD_NOTES,', got ',expected_count
             play_wave(GUARD_NOT_COMPLETE)
-            wait_for_silence()
-            time.sleep(1.0)
+            time.sleep(.7)
+            sleep_audio(.7)
+
+            # if more than three misses of guard, play guard samples
+            misses = misses + 1
+            if misses == 3:
+                play_wave(GUARD_SAMPLE)
+                time.sleep(.5)
+                sleep_audio(.5)
+                misses = 0
 
             state = 0
             # play guard waiting
             print ''
             print 'guard waiting for sequence: ', GUARD_PITCH_SEQUENCE
             play_wave(GUARD_START)
+            #time.sleep(.5)
+            #sleep_audio(.5)
             wait_for_silence()
             freq = get_first_sample()
 
@@ -282,6 +295,7 @@ def run_detect():
         wait_for_silence()
         print 'start action sound.....'
         active = True
+        misses = 0
         while active:
 
             # try to get an action pitch for up to SECONDS_OF_SILENCE seconds
@@ -293,9 +307,16 @@ def run_detect():
             # we have a pitch, try to find if it is an action pitch
             action = find_action(freq)
             if action == -1:
+                misses = misses + 1
+                if misses == 30:
+                    play_wave(ACTIVATE_SAMPLE)
+                    time.sleep(.5)
+                    sleep_audio(.5)
+                    misses = 0
                 continue
 
             # found action, get corresponding gpio pin
+            misses = 0
             expected = PITCHES[action]
             action_pin = ACTION_PINOUTS[action]
 
@@ -347,8 +368,10 @@ def play_wave(wave):
     OUTPUT_STREAM.start_stream()
     OUTPUT_STREAM.write(wave)
     time.sleep(float(len(wave)) / OUTPUT_BITRATE)
-    #sleep_audio(float(len(wave)) / OUTPUT_BITRATE)
+    sleep_audio(float(len(wave)) / OUTPUT_BITRATE)
     OUTPUT_STREAM.stop_stream()
+    wait_for_silence()
+    wait_for_silence()
     wait_for_silence()
 
 
@@ -374,16 +397,6 @@ def print_audio_devices():
     for i in range(pyaud.get_device_count()):
         dev = pyaud.get_device_info_by_index(i)
         print dev['index'], dev['name'], 'channels:', dev['maxInputChannels'], 'defaultSampleRate', dev['defaultSampleRate']
-
-
-
-GUARD_START = generate_sines( [ 2600, 2900 ], .10, OUTPUT_BITRATE)
-GUARD_NOT_COMPLETE = generate_sines( [ 2333 ], .20, OUTPUT_BITRATE)
-READY_ACTION = generate_sines( [ 2000, 2200, 2400 ], .10, OUTPUT_BITRATE)
-
-note_length_output = (float(SAMPLE_SIZE) / AUDIO_STREAM_RATE) * NOTE_SAMPLE_COUNT
-GUARD_SAMPLE = generate_sines(GUARD_PITCH_SEQUENCE, note_length_output, OUTPUT_BITRATE)
-ACTIVATE_SAMPLE = generate_sines(PITCHES, note_length_output, OUTPUT_BITRATE)
 
 
 ####################################################
@@ -419,7 +432,7 @@ parser.add_argument('-n', '--note_millis', dest='note_millis', action='store', t
 parser.add_argument('-i', '--input_audio_device', dest='input_audio_device', help='input audio device, default: ' + str(DEV))
 parser.add_argument('-d', '--output_audio_device', dest='output_audio_device', help='output audio device, default: ' + str(OUT_DEV))
 
-parser.add_argument('-x', '--invert_output', dest='invert_output', action='store_true', help='invert output, ie. HIGH=on, default LOW=on')
+parser.add_argument('-x', '--invert_output', dest='invert_output', action='store_true', help='invert output, ie. activate=HIGH, default activate=LOW')
 parser.add_argument('-a', '--audio_devices', dest='audio_devices', action='store_true', help='list audio devices and exit')
 parser.add_argument('-s', '--sample', dest='sample', action='store_true', help='continously print detected frequency pitches, ^C to exit')
 
@@ -561,7 +574,17 @@ try:
 except:
     pass
 
-#play_guard_notes(GUARD_PITCH_SEQUENCE)
+
+
+# generate wave data for audio feedback clues and samples
+GUARD_START = generate_sines( [ 2600, 2900 ], .10, OUTPUT_BITRATE)
+GUARD_NOT_COMPLETE = generate_sines( [ 2333 ], .20, OUTPUT_BITRATE)
+READY_ACTION = generate_sines( [ 2000, 2200, 2400 ], .10, OUTPUT_BITRATE)
+
+note_length_output = (float(SAMPLE_SIZE) / AUDIO_STREAM_RATE) * NOTE_SAMPLE_COUNT
+GUARD_SAMPLE = generate_sines(GUARD_PITCH_SEQUENCE, note_length_output * 3, OUTPUT_BITRATE)
+ACTIVATE_SAMPLE = generate_sines(PITCHES, note_length_output * 3, OUTPUT_BITRATE)
+
 
 
 #####################################################
